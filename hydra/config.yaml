@@ -1,0 +1,8 @@
+serve:
+  public:
+    tls:
+      enabled: true
+      key:
+        path: /mkcert/server.key
+      cert:
+        path: /mkcert/server.crt

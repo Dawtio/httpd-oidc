@@ -1,0 +1,50 @@
+services:
+  mkcert-install:
+    container_name: mkcert_install
+    build:
+      dockerfile: mkcert.Dockerfile
+    command: mkcert -install
+    volumes:
+      - type: bind
+        source: ${PWD}/mkcert/app
+        target: /mkcert
+      - type: bind
+        source: ${PWD}/mkcert/root
+        target: /root/.local/share/mkcert
+
+  mkcert-generate:
+    container_name: mkcert_generate
+    build:
+      dockerfile: mkcert.Dockerfile
+    command: mkcert -key-file server.key -cert-file server.crt hydra_server example.com "*.example.com" example.test localhost 127.0.0.1 ::1
+    volumes:
+      - type: bind
+        source: ${PWD}/mkcert/app
+        target: /mkcert
+      - type: bind
+        source: ${PWD}/mkcert/root
+        target: /root/.local/share/mkcert
+    depends_on:
+      mkcert-install:
+        condition: service_completed_successfully
+
+  certificate-permission:
+    container_name: mkcert_permission
+    image: alpine:latest
+    command: 
+      - /bin/sh
+      - -c
+      - |
+        chmod 777 /mkcert/server.key
+        chmod 777 /mkcert/server.crt
+        cp /root/rootCA.pem /root/rootCA.crt
+    volumes:
+      - type: bind
+        source: ${PWD}/mkcert/app
+        target: /mkcert
+      - type: bind
+        source: ${PWD}/mkcert/root
+        target: /root/
+    depends_on:
+      mkcert-generate:
+        condition: service_completed_successfully

@@ -1,0 +1,99 @@
+services:
+  postgres:
+    image: postgres:9.6
+    container_name: postgres
+    environment:
+      POSTGRES_USER: "hydra"
+      POSTGRES_PASSWORD: "secret"
+      POSTGRES_DB: "hydra"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} --dbname $${POSTGRES_DB}"]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      timeout: 10s
+
+  hydra-db-init:
+    image: oryd/hydra:v1.10.6
+    container_name: hydra_db_init
+    command: migrate sql --yes "postgres://hydra:secret@postgres:5432/hydra?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
+
+  hydra-server:
+    image: oryd/hydra:v1.10.6
+    container_name: hydra_server
+    environment:
+      DSN: "postgres://hydra:secret@postgres:5432/hydra?sslmode=disable"
+      #URLS_SELF_ISSUER: https://localhost:5444/
+      URLS_SELF_ISSUER: https://hydra_server:4444/ 
+      URLS_CONSENT: http://localhost:9020/consent
+      URLS_LOGIN: http://localhost:9020/login
+    volumes:
+      - ${PWD}/mkcert/app/server.crt:/mkcert/server.crt
+      - ${PWD}/mkcert/app/server.key:/mkcert/server.key
+      - ${PWD}/hydra/config.yaml:/config/config.yaml
+    ports:
+      - "4444:4444"
+      - "5445:4445"
+    command: serve all --config /config/config.yaml
+    depends_on:
+      hydra-db-init:
+        condition: service_completed_successfully
+    healthcheck:
+      # As there's not shell for curling /health/alive, use a simple commands to list clients. Assuming server is running if we've an answer.
+      test: ["CMD", "hydra", "clients", "list", "--endpoint", "https://localhost:4445", "--skip-tls-verify"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  hydra-consent:
+    image: oryd/hydra-login-consent-node:v1.10.6
+    container_name: hydra_consent
+    environment:
+      HYDRA_ADMIN_URL: https://hydra_server:4445
+      NODE_TLS_REJECT_UNAUTHORIZED: 0
+    ports:
+      - "9020:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      hydra-server:
+        condition: service_healthy
+
+  hydra-client-init:
+    image: oryd/hydra:v1.10.6
+    container_name: hydra_client_init
+    environment:
+      HYDRA_ADMIN_URL: https://hydra_server:4445
+    command: clients create --skip-tls-verify --id my-super-app-id --secret my-super-password --grant-types authorization_code,refresh_token,client_credentials,implicit --response-types token,code,id_token --scope openid,profile --callbacks https://localhost:8082/callback --token-endpoint-auth-method none
+    depends_on:
+      # Need the server to be started to create clients.
+      hydra-server:
+        condition: service_healthy
+
+  httpd:
+    build:
+      dockerfile: httpd.Dockerfile
+    container_name: httpd_server
+    ports:
+      - "8081:80"
+      - "8082:443"
+    volumes:
+      - ${PWD}/apache/httpd.conf:/usr/local/apache2/conf/httpd.conf
+      - ${PWD}/apache/ssl.conf:/usr/local/apache2/conf/extra/httpd-ssl.conf
+      - ${PWD}/apache/index.html:/usr/local/apache2/htdocs/index.html
+      - ${PWD}/apache/protected.html:/usr/local/apache2/htdocs/protected.html
+      - ${PWD}/mkcert/app/server.crt:/usr/local/apache2/certificates/server.crt
+      - ${PWD}/mkcert/app/server.key:/usr/local/apache2/certificates/server.key
+
+networks:
+  default:
+    name: hydra
